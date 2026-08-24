@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import subprocess
 import time
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -141,6 +142,38 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if not self.authorized():
             self.require_auth(); return
+        if self.path == "/api/game-command":
+            if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+                self.send_error(415); return
+            try:
+                length = min(int(self.headers.get("Content-Length", "0")), 4096)
+                command = json.loads(self.rfile.read(length))
+                action = command.get("action")
+                player = command.get("player", "")
+                message = command.get("message", "")
+                if action not in {"announce", "kick", "ban", "unban"}:
+                    raise ValueError("Unsupported action")
+                if action == "announce":
+                    if not isinstance(message, str) or not message.strip() or len(message) > 300:
+                        raise ValueError("Announcement must contain 1-300 characters")
+                    payload_data = {"action": action, "message": message.strip()}
+                else:
+                    if not isinstance(player, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", player):
+                        raise ValueError("Invalid player name")
+                    payload_data = {"action": action, "player": player}
+                target = DATA_DIR / "command.json"
+                fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o660)
+                with os.fdopen(fd, "w") as handle:
+                    json.dump(payload_data, handle)
+                response, code = {"ok": True, "message": action + " queued."}, 202
+            except FileExistsError:
+                response, code = {"ok": False, "message": "Another game command is pending."}, 409
+            except (ValueError, json.JSONDecodeError) as exc:
+                response, code = {"ok": False, "message": str(exc)}, 400
+            except OSError as exc:
+                response, code = {"ok": False, "message": "Could not queue command: " + str(exc)}, 500
+            payload = json.dumps(response).encode()
+            self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(payload))); self.end_headers(); self.wfile.write(payload); return
         if self.path != "/api/action" or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
             self.send_error(404); return
         try:
