@@ -14,6 +14,7 @@ WORLD_DIR = Path("/var/lib/luanti/worlds/family")
 DATA_DIR = WORLD_DIR / "dashboard"
 BACKUP_DIR = Path("/var/backups/luanti")
 CONFIG_FILE = Path("/etc/luanti-dashboard.json")
+ACTION_DIR = Path("/run/luanti-dashboard-actions")
 
 def read_json(path, fallback):
     try:
@@ -124,7 +125,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers(); self.wfile.write(data); return
         if self.path == "/api/logs":
-            result = subprocess.run(["sudo", "/usr/local/sbin/luanti-dashboard-admin", "logs"], text=True, capture_output=True, timeout=8)
+            result = subprocess.run(["journalctl", "-u", "luanti.service", "-n", "120", "--no-pager", "-o", "short-iso"], text=True, capture_output=True, timeout=8)
             payload = json.dumps({"ok": result.returncode == 0, "logs": result.stdout[-30000:], "error": result.stderr}).encode()
             self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(payload))); self.end_headers(); self.wfile.write(payload); return
         if self.path == "/api/dashboard":
@@ -150,11 +151,15 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if action not in {"start", "stop", "restart", "backup"}:
             self.send_error(400); return
         try:
-            result = subprocess.run(["sudo", "/usr/local/sbin/luanti-dashboard-admin", action], text=True, capture_output=True, timeout=180)
-            response = {"ok": result.returncode == 0, "message": (result.stdout or result.stderr or action + " completed").strip()}
-            code = 200 if result.returncode == 0 else 500
-        except subprocess.TimeoutExpired:
-            response, code = {"ok": False, "message": "Action timed out."}, 504
+            request = ACTION_DIR / "request"
+            fd = os.open(request, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as handle:
+                handle.write(action + "\n")
+            response, code = {"ok": True, "message": action + " accepted. Status will refresh automatically."}, 202
+        except FileExistsError:
+            response, code = {"ok": False, "message": "Another administrative action is still running."}, 409
+        except OSError as exc:
+            response, code = {"ok": False, "message": "Could not queue action: " + str(exc)}, 500
         payload = json.dumps(response).encode()
         self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(payload))); self.end_headers(); self.wfile.write(payload)
 
