@@ -15,6 +15,7 @@ WORLD_DIR = Path("/var/lib/luanti/worlds/family")
 DATA_DIR = WORLD_DIR / "dashboard"
 BACKUP_DIR = Path("/var/backups/luanti")
 CONFIG_FILE = Path("/etc/luanti-dashboard.json")
+LUANTI_CONFIG = Path("/etc/luanti/luanti.conf")
 ACTION_DIR = Path("/run/luanti-dashboard-actions")
 
 def read_json(path, fallback):
@@ -79,10 +80,24 @@ def latest_backup():
         pass
     return {"name": None, "time": None, "size": 0, "count": 0}
 
+def server_settings():
+    result={"server_name":"Family World","server_description":"","max_users":10,"enable_pvp":True}
+    try:
+        for line in LUANTI_CONFIG.read_text(encoding="utf-8").splitlines():
+            if "=" not in line or line.lstrip().startswith("#"): continue
+            key,value=[x.strip() for x in line.split("=",1)]
+            if key in {"server_name","server_description"}: result[key]=value
+            elif key=="max_users":
+                try: result[key]=int(value)
+                except ValueError: pass
+            elif key=="enable_pvp": result[key]=value.lower() in {"true","yes","1"}
+    except OSError: pass
+    return result
+
 def dashboard_payload():
     state = read_json(DATA_DIR / "state.json", {"players": [], "player_count": 0, "generated_at": None})
     chat = read_json(DATA_DIR / "chat.json", [])
-    return {"generated_at": int(time.time()), "state": state, "chat": chat[:50], "backups": backup_files(), "server": {"status": service_value("ActiveState") or "unknown", "memory_mb": memory_mb(), "uptime_seconds": uptime_seconds(), "world_bytes": directory_size(WORLD_DIR), "port": 30000, "backup": latest_backup()}}
+    return {"generated_at": int(time.time()), "settings": server_settings(), "state": state, "chat": chat[:50], "backups": backup_files(), "server": {"status": service_value("ActiveState") or "unknown", "memory_mb": memory_mb(), "uptime_seconds": uptime_seconds(), "world_bytes": directory_size(WORLD_DIR), "port": 30000, "backup": latest_backup()}}
 
 class DashboardHandler(SimpleHTTPRequestHandler):
     server_version = "LuantiDashboard/1.0"
@@ -142,6 +157,28 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if not self.authorized():
             self.require_auth(); return
+        if self.path == "/api/settings":
+            if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+                self.send_error(415); return
+            try:
+                length=min(int(self.headers.get("Content-Length","0")),4096)
+                data=json.loads(self.rfile.read(length))
+                name=data.get("server_name"); desc=data.get("server_description"); users=data.get("max_users"); pvp=data.get("enable_pvp")
+                if not isinstance(name,str) or not 1<=len(name.strip())<=80: raise ValueError("Server name must contain 1-80 characters")
+                if not isinstance(desc,str) or len(desc)>300: raise ValueError("Description is too long")
+                if not isinstance(users,int) or not 1<=users<=100: raise ValueError("Maximum players must be 1-100")
+                if not isinstance(pvp,bool): raise ValueError("Invalid PvP value")
+                request=ACTION_DIR/"request"
+                if request.exists(): raise FileExistsError
+                settings=ACTION_DIR/"settings.json"
+                settings.write_text(json.dumps({"server_name":name.strip(),"server_description":desc.strip(),"max_users":users,"enable_pvp":pvp}),encoding="utf-8")
+                fd=os.open(request,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+                with os.fdopen(fd,"w") as handle: handle.write("settings\n")
+                response,code={"ok":True,"message":"Settings accepted. A backup and restart will run automatically."},202
+            except FileExistsError: response,code={"ok":False,"message":"Another administrative action is running."},409
+            except (ValueError,json.JSONDecodeError) as exc: response,code={"ok":False,"message":str(exc)},400
+            except OSError as exc: response,code={"ok":False,"message":"Could not queue settings: "+str(exc)},500
+            payload=json.dumps(response).encode(); self.send_response(code); self.send_header("Content-Type","application/json"); self.send_header("Content-Length",str(len(payload))); self.end_headers(); self.wfile.write(payload); return
         if self.path == "/api/game-command":
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 self.send_error(415); return
