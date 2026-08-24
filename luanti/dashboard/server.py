@@ -62,7 +62,7 @@ def uptime_seconds():
 
 def backup_files():
     try:
-        files = [BACKUP_DIR / item["name"] for item in backup_files()]
+        files = sorted(BACKUP_DIR.glob("luanti-family-*.tar.gz"), key=lambda p: p.stat().st_mtime, reverse=True)
         return [{"name": p.name, "time": int(p.stat().st_mtime), "size": p.stat().st_size} for p in files]
     except OSError:
         return []
