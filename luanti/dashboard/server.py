@@ -60,6 +60,13 @@ def uptime_seconds():
     except (OSError, ValueError, IndexError):
         return 0
 
+def backup_files():
+    try:
+        files = [BACKUP_DIR / item["name"] for item in backup_files()]
+        return [{"name": p.name, "time": int(p.stat().st_mtime), "size": p.stat().st_size} for p in files]
+    except OSError:
+        return []
+
 def latest_backup():
     try:
         files = sorted(BACKUP_DIR.glob("luanti-family-*.tar.gz"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -73,7 +80,7 @@ def latest_backup():
 def dashboard_payload():
     state = read_json(DATA_DIR / "state.json", {"players": [], "player_count": 0, "generated_at": None})
     chat = read_json(DATA_DIR / "chat.json", [])
-    return {"generated_at": int(time.time()), "state": state, "chat": chat[:50], "server": {"status": service_value("ActiveState") or "unknown", "memory_mb": memory_mb(), "uptime_seconds": uptime_seconds(), "world_bytes": directory_size(WORLD_DIR), "port": 30000, "backup": latest_backup()}}
+    return {"generated_at": int(time.time()), "state": state, "chat": chat[:50], "backups": backup_files(), "server": {"status": service_value("ActiveState") or "unknown", "memory_mb": memory_mb(), "uptime_seconds": uptime_seconds(), "world_bytes": directory_size(WORLD_DIR), "port": 30000, "backup": latest_backup()}}
 
 class DashboardHandler(SimpleHTTPRequestHandler):
     server_version = "LuantiDashboard/1.0"
@@ -102,6 +109,24 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if not self.authorized():
             self.require_auth()
             return
+        if self.path.startswith("/api/backups/"):
+            name = self.path.split("/")[-1]
+            if not name.startswith("luanti-family-") or not name.endswith(".tar.gz"):
+                self.send_error(404); return
+            path = BACKUP_DIR / name
+            try:
+                data = path.read_bytes()
+            except OSError:
+                self.send_error(404); return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/gzip")
+            self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers(); self.wfile.write(data); return
+        if self.path == "/api/logs":
+            result = subprocess.run(["sudo", "/usr/local/sbin/luanti-dashboard-admin", "logs"], text=True, capture_output=True, timeout=8)
+            payload = json.dumps({"ok": result.returncode == 0, "logs": result.stdout[-30000:], "error": result.stderr}).encode()
+            self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(payload))); self.end_headers(); self.wfile.write(payload); return
         if self.path == "/api/dashboard":
             payload = json.dumps(dashboard_payload()).encode()
             self.send_response(200)
@@ -112,6 +137,26 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.wfile.write(payload)
             return
         super().do_GET()
+    def do_POST(self):
+        if not self.authorized():
+            self.require_auth(); return
+        if self.path != "/api/action" or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+            self.send_error(404); return
+        try:
+            length = min(int(self.headers.get("Content-Length", "0")), 2048)
+            action = json.loads(self.rfile.read(length)).get("action")
+        except (ValueError, json.JSONDecodeError):
+            self.send_error(400); return
+        if action not in {"start", "stop", "restart", "backup"}:
+            self.send_error(400); return
+        try:
+            result = subprocess.run(["sudo", "/usr/local/sbin/luanti-dashboard-admin", action], text=True, capture_output=True, timeout=180)
+            response = {"ok": result.returncode == 0, "message": (result.stdout or result.stderr or action + " completed").strip()}
+            code = 200 if result.returncode == 0 else 500
+        except subprocess.TimeoutExpired:
+            response, code = {"ok": False, "message": "Action timed out."}, 504
+        payload = json.dumps(response).encode()
+        self.send_response(code); self.send_header("Content-Type", "application/json"); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(payload))); self.end_headers(); self.wfile.write(payload)
 
 if __name__ == "__main__":
     ThreadingHTTPServer(("0.0.0.0", 8080), DashboardHandler).serve_forever()
