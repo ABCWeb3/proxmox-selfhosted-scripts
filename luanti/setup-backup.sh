@@ -19,6 +19,9 @@ pct exec "$CT_ID" -- bash -s <<'CONTAINER_SCRIPT'
 set -Eeuo pipefail
 
 install -d -m 0750 /var/backups/luanti
+if getent group luanti-dashboard >/dev/null 2>&1; then
+  chgrp luanti-dashboard /var/backups/luanti
+fi
 
 cat >/usr/local/sbin/luanti-backup <<'BACKUP_SCRIPT'
 #!/usr/bin/env bash
@@ -58,6 +61,9 @@ tar --numeric-owner -C / -czf "$temporary"   "${WORLD_DIR#/}"   "${CONFIG_FILE#/
 
 mv "$temporary" "$archive"
 chmod 0640 "$archive"
+if getent group luanti-dashboard >/dev/null 2>&1; then
+  chgrp luanti-dashboard "$archive"
+fi
 
 find "$BACKUP_DIR" -maxdepth 1 -type f   -name 'luanti-family-*.tar.gz'   -mtime "+$RETENTION_DAYS" -delete
 
