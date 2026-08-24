@@ -125,6 +125,10 @@ git clone --depth 1 --branch "$GAME_BRANCH" \
 
 chown -R luanti:luanti /var/lib/luanti /var/log/luanti
 
+# A system-wide Luanti build discovers games under its static shared-data path.
+install -d /usr/local/share/luanti/games
+ln -sfn /var/lib/luanti/games/voxelibre /usr/local/share/luanti/games/voxelibre
+
 install -d /etc/luanti
 cat >/etc/luanti/luanti.conf <<'LUANTI_CONFIG'
 port = 30000
