@@ -69,7 +69,6 @@ chmod 0750 /usr/local/sbin/luanti-backup
 cat >/etc/systemd/system/luanti-backup.service <<'SERVICE'
 [Unit]
 Description=Back up Luanti family world
-Requires=luanti.service
 After=luanti.service
 
 [Service]
