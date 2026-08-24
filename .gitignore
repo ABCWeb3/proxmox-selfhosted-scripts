@@ -1,0 +1,32 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*.bak
+tmp/
+.cache/
+
+# Backups and archives
+backups/
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+
+# Operating systems and editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
