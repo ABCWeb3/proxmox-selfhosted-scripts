@@ -10,15 +10,18 @@ RAW_BASE="$1"
 curl -fsSL "$RAW_BASE/index.html" -o /opt/luanti-dashboard/static/index.html
 curl -fsSL "$RAW_BASE/server.py" -o /opt/luanti-dashboard/server.py
 curl -fsSL "$RAW_BASE/admin-helper.sh" -o /usr/local/sbin/luanti-dashboard-admin
+curl -fsSL "$RAW_BASE/mod/init.lua" -o /var/lib/luanti/worlds/family/worldmods/family_dashboard/init.lua
 python3 -m py_compile /opt/luanti-dashboard/server.py
 chown -R luanti-dashboard:luanti-dashboard /opt/luanti-dashboard
 chmod 0750 /opt/luanti-dashboard/server.py
+chown luanti:luanti /var/lib/luanti/worlds/family/worldmods/family_dashboard/init.lua
 chown root:root /usr/local/sbin/luanti-dashboard-admin
 chmod 0755 /usr/local/sbin/luanti-dashboard-admin
 install -d /etc/systemd/system/luanti-dashboard.service.d
 cat >/etc/systemd/system/luanti-dashboard.service.d/administration.conf <<'DROPIN'
 [Service]
-SupplementaryGroups=systemd-journal
+SupplementaryGroups=systemd-journal luanti
+ReadWritePaths=/var/lib/luanti/worlds/family/dashboard
 RuntimeDirectory=luanti-dashboard-actions
 RuntimeDirectoryMode=0750
 DROPIN
@@ -45,7 +48,9 @@ if [[ -d /var/backups/luanti ]]; then
   find /var/backups/luanti -type f -name 'luanti-family-*.tar.gz' -exec chmod 0640 {} +
 fi
 systemctl daemon-reload
+install -d -o luanti -g luanti -m 2770 /var/lib/luanti/worlds/family/dashboard
 systemctl restart luanti-dashboard.service
+systemctl restart luanti.service
 systemctl enable --now luanti-dashboard-action.path
 sleep 2
 systemctl --no-pager --full status luanti-dashboard.service
